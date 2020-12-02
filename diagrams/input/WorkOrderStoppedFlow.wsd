@@ -1,0 +1,113 @@
+@startuml WorkOrderStoppedFlow
+title Work Order Stopped
+skinparam monochrome true
+
+actor Supervisor as super
+actor Operator as oper
+
+box "Work Order Api" #Withe
+participant "WorkOrder\nController" as work
+database "WorkOrder\nRepository" as db
+end box
+
+box "Notification Api" #Withe
+participant "Notification\nController" as noti
+end box
+
+oper -> work: ChangeStatus(newWorkOrder)
+note right: lock thread for newWorkOrder.id
+activate work
+
+work -> db: Get(newWorkOrder.id)
+activate db
+
+db --> work: currentWorkOrder
+deactivate db
+
+alt newWorkOrder.status == "started" &&\n currentWorkOrder.status == "started"
+    work --> oper: [false, Error("work order has already been started")]    
+
+else newWorkOrder.status == "started" &&\n currentWorkOrder.status == "completed"
+    work --> oper: [false, Error("work order has already been completed")]    
+
+else newWorkOrder.status == "started"
+    work -> noti: Push(newWorkOrder.id,\n newWorkOrder.status, newWorkOrder.operatorId)
+    activate noti
+
+    work -> db: Change(newWorkOrder)
+    activate db
+
+    db --> work: ok
+    deactivate db
+
+    noti --> work: ok
+    deactivate noti
+
+    work --> oper: true
+    deactivate work
+
+    hnote over work: previousWorkOrder = currentWorkOrder
+    work -> work: LaunchThreadCheck\n(previousWorkOrder, 30)
+    activate work
+
+end
+
+...**Less than 30 seconds**...
+
+super -> work: ChangeStatus(stoppedWorkOrder)
+note right: lock thread for stoppedWorkOrder.id
+activate work
+
+work -> db: Get(stoppedWorkOrder.id)
+activate db
+
+db --> work: currentWorkOrder
+deactivate db
+
+alt stoppedWorkOrder.status == "stopped" &&\n currentWorkOrder.status != "started"
+    work --> super: [false, Error("work order was not started")]    
+
+else stoppedWorkOrder.status == "stopped" &&\n (stoppedWorkOrder.operator != currentWorkOrder.operator ||\n !stoppedWorkOrder.isSupervisor)
+    work --> super: [false, Error("invalid operator")]    
+
+else stoppedWorkOrder.status == "stopped"
+    work -> noti: push(stoppedWorkOrder.id,\n stoppedWorkOrder.status, stoppedWorkOrder.operatorId)
+    activate noti
+
+    work -> db: Change(stoppedWorkOrder)
+    activate db
+
+    db --> work: ok
+    deactivate db
+
+    noti --> work: ok
+    deactivate noti
+
+    work --> super: true
+    deactivate work
+end
+
+...**After 30 seconds**...
+note right work: lock thread for previousWorkOrder.id
+work -> db: Get(previousWorkOrder.id)
+activate db
+
+db --> work: currentWorkOrder
+deactivate db
+
+alt currentWorkOrder.status == "started"
+    work -> noti: push(previousWorkOrder.id,\n previousWorkOrder.status, previousWorkOrder.operatorId)
+    activate noti
+
+    work -> db: Change(previousWorkOrder)
+    activate db
+
+    db --> work: ok
+    deactivate db
+
+    noti --> work: ok
+    deactivate noti
+    deactivate work
+end
+
+@enduml
